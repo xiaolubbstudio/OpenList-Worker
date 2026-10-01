@@ -5,6 +5,7 @@ import { setUserPassword } from "../pkg/password"
 import { verify } from "hono/jwt"
 import { getJwtSecret } from "./middlewares"
 import { listUserSshKeys, deleteUserSshKey } from "../internal/op/sshkey"
+import { assertStudioMemberLimit } from "../internal/model/studio-members"
 
 export const userRouter = new Hono()
 
@@ -118,9 +119,11 @@ userRouter.post("/create", async (c) => {
     pwd_update_at: new Date().toISOString(),
   }
 
+  const next = { ...db, users: [...db.users, newUser] }
+  try { assertStudioMemberLimit(next.users, c.env) }
+  catch (error: any) { return c.json({ code: 409, message: error.message, data: null }, 409) }
   await setUserPassword(newUser, plainPassword)
-  db.users.push(newUser)
-  await saveDb(db, c.env)
+  await saveDb(next, c.env)
 
   return c.json({
     code: 200,
@@ -150,7 +153,7 @@ userRouter.post("/update", async (c) => {
     return c.json({ code: 404, message: "User not found", data: null }, 404)
   }
 
-  const user = db.users[userIdx]
+  const user = { ...db.users[userIdx] }
 
   if (body.username && body.username !== user.username) {
     const exists = db.users.some(
@@ -177,8 +180,11 @@ userRouter.post("/update", async (c) => {
   if (body.sso_id !== undefined) user.sso_id = body.sso_id
   if (body.allow_ldap !== undefined) user.allow_ldap = !!body.allow_ldap
 
-  db.users[userIdx] = user
-  await saveDb(db, c.env)
+  const users = db.users.slice()
+  users[userIdx] = user
+  try { assertStudioMemberLimit(users, c.env) }
+  catch (error: any) { return c.json({ code: 409, message: error.message, data: null }, 409) }
+  await saveDb({ ...db, users }, c.env)
 
   return c.json({ code: 200, message: "success", data: null })
 })

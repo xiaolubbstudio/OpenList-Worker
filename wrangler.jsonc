@@ -18,6 +18,7 @@
   },
   "vars": {
     "ENVIRONMENT": "production",
+    "STUDIO_MEMBER_LIMIT": "5",
     "DB_DRIVER": "d1",
     "DB_FORMAT": "sql",
     "DB_CIPHER": "aes-256-gcm",

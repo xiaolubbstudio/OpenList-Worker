@@ -13,6 +13,7 @@ import {
   writePersistedSecret,
 } from "./store/json"
 import { getStoreBackend, readCipher } from "./store/backend"
+import { assertStudioMemberLimit } from "./studio-members"
 
 // 保持外部（middlewares.ts / router.ts / admin.ts）对 getKvBinding / getKvStatus
 // 的既有引用不变，从 json 后端 re-export。
@@ -1191,6 +1192,7 @@ const loadDb = async (envCtx?: any) => {
   // 此时必须回退到请求级 globalEnvCtx，否则 readDriver 读不到 DB_DRIVER、
   // getD1 读不到 DB binding，会错误回退到 json 后端读到旧的 KV 数据。
   const activeEnv = envCtx || globalEnvCtx
+
   // 解析器可被测试注入（__setStoreBackendLoaderForTest），故用 let + 可空：
   // 解析动作必须在 try 内 —— 配置类错误（驱动缺失、驱动 × 格式非法）要与
   // 读取错误走同一条降级路径，否则它会以「未捕获异常」的形式抛出，
@@ -2036,6 +2038,9 @@ export const saveDb = async (
   }
 
   const activeEnv = envCtx || globalEnvCtx
+
+  // 包括管理 API 和配置导入在内，所有写入都必须满足成员名额限制。
+  assertStudioMemberLimit(data.users || [], activeEnv)
 
   // ============ 写前守卫：永远不得以「空数据」覆盖持久化配置 ============
   //
