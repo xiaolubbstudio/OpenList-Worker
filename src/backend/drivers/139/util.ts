@@ -357,7 +357,7 @@ export class Yun139ApiClient {
 
   async deleteFile(contentIdOrFileId: string): Promise<void> {
     if (this.isPersonalNew()) {
-      await this.request("/file/delete", {
+      await this.request("/recyclebin/batchTrash", {
         fileIds: [contentIdOrFileId],
       })
       return
@@ -377,7 +377,7 @@ export class Yun139ApiClient {
 
   async deleteCatalog(catalogIdOrFileId: string): Promise<void> {
     if (this.isPersonalNew()) {
-      await this.request("/file/delete", {
+      await this.request("/recyclebin/batchTrash", {
         fileIds: [catalogIdOrFileId],
       })
       return

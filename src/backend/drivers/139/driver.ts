@@ -32,7 +32,7 @@ export class Yun139Driver implements StorageDriver {
     return this.client.isPersonalNew() ? "/" : ""
   }
 
-  private async resolveCatalogId(physicalPath: string): Promise<string> {
+  private async resolveCatalogId(physicalPath: string, strict = false): Promise<string> {
     const clean = this.cleanPath(physicalPath)
     if (clean === "/") {
       return this.getRootId()
@@ -47,6 +47,7 @@ export class Yun139Driver implements StorageDriver {
       if (foundFolder) {
         currentCatalogId = foundFolder.catalogID
       } else {
+        if (strict) throw new Error("Upload folder not found")
         break
       }
     }
@@ -250,6 +251,58 @@ export class Yun139Driver implements StorageDriver {
     content: Buffer | Uint8Array,
   ): Promise<void> {
     throw new Error("139Yun upload is not implemented in this Worker driver")
+  }
+
+  async beginStudioUpload(physicalPath: string, name: string, size: number, hash: string) {
+    if (!this.client.isPersonalNew()) throw new Error("Unsupported upload storage")
+    const parentId = await this.resolveCatalogId(physicalPath, true)
+    const chunkSize = 8 * 1024 * 1024
+    const partInfos = Array.from({ length: Math.ceil(size / chunkSize) }, (_, i) => ({
+      partNumber: i + 1, partSize: Math.min(chunkSize, size - i * chunkSize),
+      parallelHashCtx: { partOffset: i * chunkSize },
+    }))
+    const result = await this.client.request<any>("/file/create", {
+      contentHash: hash, contentHashAlgorithm: "SHA256", contentType: "application/octet-stream",
+      parallelUpload: false, partInfos, size, parentFileId: parentId, name,
+      type: "file", fileRenameMode: "auto_rename",
+    })
+    const data = result.data
+    if (!data?.fileId || !(data.uploadId || data.exist || data.rapidUpload)) throw new Error("Upload creation failed")
+    return { parentId, fileId: data.fileId, uploadId: data.uploadId || "", name: data.fileName || name,
+      size, hash, chunkSize, existing: !!data.exist, ready: !!(data.exist || data.rapidUpload) }
+  }
+
+  async studioPartLink(state: any, partNumber: number) {
+    const size = Math.min(state.chunkSize, state.size - (partNumber - 1) * state.chunkSize)
+    let result: any
+    try { result = await this.client.request<any>("/file/getUploadUrl", {
+      fileId: state.fileId, uploadId: state.uploadId,
+      partInfos: [{ partNumber, partSize: size, parallelHashCtx: { partOffset: (partNumber - 1) * state.chunkSize } }],
+      commonAccountInfo: { account: this.client.account, accountType: 1 },
+    }) } catch { throw new Error("STUDIO_UPLOAD_URL_REQUEST_FAILED") }
+    const info = result.data?.partInfos?.find((p: any) => Number(p.partNumber) === partNumber)
+    if (!info?.uploadUrl) throw new Error("STUDIO_UPLOAD_URL_MISSING")
+    const url = new URL(info.uploadUrl)
+    if (url.protocol !== "https:" || url.username || url.password ||
+        !["139.com", "10086.cn", "cmecloud.cn"].some(domain => url.hostname === domain || url.hostname.endsWith("." + domain))) throw new Error("STUDIO_UPLOAD_HOST_UNSUPPORTED")
+    return url.href
+  }
+
+  async checkStudioDestination(physicalPath: string, state: any) {
+    if (await this.resolveCatalogId(physicalPath, true) !== state.parentId) throw new Error("Upload folder changed")
+  }
+
+  async finishStudioUpload(state: any) {
+    if (!state.existing) {
+      const result = await this.client.request<any>("/file/complete", {
+        contentHash: state.hash, contentHashAlgorithm: "SHA256", fileId: state.fileId, uploadId: state.uploadId,
+      })
+      if (result.success === false) throw new Error("Cloud completion failed")
+    }
+    const disk = await this.client.listFiles(state.parentId)
+    const file = disk.files.find(f => f.contentID === state.fileId && Number(f.contentSize) === state.size)
+    if (!file) throw new Error("Uploaded file has not appeared in the folder")
+    return { name: file.contentName, size: Number(file.contentSize) }
   }
 
   async getDetails(): Promise<{ total_space?: number; used_space?: number }> {
