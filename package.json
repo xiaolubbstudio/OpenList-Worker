@@ -26,8 +26,9 @@
   },
   "scripts": {
     "fetch:frontend": "node scripts/fetch-frontend.mjs",
-    "deploy": "node scripts/studio-check-isolation.mjs && wrangler deploy --minify",
+    "deploy": "node scripts/studio-check-isolation.mjs && node scripts/studio-package-website.mjs && wrangler deploy --minify",
     "test:auth": "tsx --test src/backend/server/default_credentials.test.ts src/backend/server/guest_auth.test.ts src/backend/server/auth_2fa.test.ts src/backend/server/studio-token-revocation.test.ts src/backend/server/healthz.test.ts",
-    "build": "node scripts/studio-fetch-frontend.mjs"
+    "build": "node scripts/studio-fetch-frontend.mjs",
+    "build:studio": "node scripts/studio-package-website.mjs"
   }
 }

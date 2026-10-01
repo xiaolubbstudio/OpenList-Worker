@@ -13,7 +13,8 @@
     "binding": "ASSETS",
     "run_worker_first": [
       "/",
-      "/index.html"
+      "/index.html",
+      "/api/*"
     ]
   },
   "vars": {
@@ -22,7 +23,10 @@
     "DB_DRIVER": "d1",
     "DB_FORMAT": "sql",
     "DB_CIPHER": "aes-256-gcm",
-    "ALLOW_URLS": "https://xiaolubbstudio.github.io"
+    "ALLOW_URLS": "https://xiaolubbstudio.github.io,https://xczstudio-openlist-trial.eliya-activation-cloud.workers.dev",
+    "STUDIO_API_PER_MINUTE": "300",
+    "STUDIO_LOGIN_FAILURES": "5",
+    "STUDIO_LOGIN_LOCK_SECONDS": "900"
   },
   "d1_databases": [
     {

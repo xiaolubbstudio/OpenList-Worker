@@ -8,6 +8,8 @@ import { setEnvCtx } from "./internal/model/db"
 import { getStoreConfigErrorDetail } from "./internal/model/store/backend"
 import { storageErrorSummary, uiStorageError } from "./server/storage-error"
 
+import { studioTrafficMiddleware } from './server/studio-traffic'
+
 const app = new Hono()
 
 /**
@@ -129,6 +131,8 @@ app.use("*", async (c, next) => {
 
   await next()
 })
+
+app.use('/api/*', studioTrafficMiddleware)
 
 // 在 Serverless 环境中，所有逻辑都是无状态的且由请求触发。
 // 这里不应该初始化任何常驻的后台任务 (如 Cron 或 线程池)。
