@@ -33,6 +33,13 @@ import { getAuditLogger } from "../pkg/audit"
 export const authRouter = new Hono()
 export const meRouter = new Hono()
 
+// Only the isolated studio's ordinary members get long sessions. Admins retain seven days.
+export function studioSessionSeconds(env: any, role: number) {
+  const days = Number(env?.STUDIO_MEMBER_SESSION_DAYS)
+  return role === 0 && Number.isInteger(days) && days >= 7 && days <= 180
+    ? days * 86400 : 7 * 86400
+}
+
 // --- 登录防爆破（增强版：KV 共享 + 指数退避）---
 // 2026-09-08 安全增强：
 // 1. 使用 KV 存储失败计数，支持多实例共享
@@ -514,7 +521,7 @@ authRouter.post("/login", async (c) => {
         id: matchedUser.id,
         username: matchedUser.username,
         role: matchedUser.role,
-        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
+        exp: Math.floor(Date.now() / 1000) + studioSessionSeconds(c.env, matchedUser.role),
         jti: generateJti(),
       }
       const secret = await getJwtSecret(c)
@@ -530,7 +537,7 @@ authRouter.post("/login", async (c) => {
       return c.json({
         code: 200,
         message: "success",
-        data: { token, csrf_token: csrfToken },
+        data: { token, csrf_token: csrfToken, expires_at: payload.exp },
       })
     }
   }
@@ -597,7 +604,7 @@ authRouter.post("/login/hash", async (c) => {
         id: matchedUser.id,
         username: matchedUser.username,
         role: matchedUser.role,
-        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
+        exp: Math.floor(Date.now() / 1000) + studioSessionSeconds(c.env, matchedUser.role),
         jti: generateJti(),
       }
       const secret = await getJwtSecret(c)
@@ -613,7 +620,7 @@ authRouter.post("/login/hash", async (c) => {
       return c.json({
         code: 200,
         message: "success",
-        data: { token, csrf_token: csrfToken },
+        data: { token, csrf_token: csrfToken, expires_at: payload.exp },
       })
     }
   }
@@ -624,6 +631,24 @@ authRouter.post("/login/hash", async (c) => {
 
   await recordLoginFailure(c, username, c.env)
   return c.json({ code: 401, message: "Invalid credentials", data: null }, 401)
+})
+
+// Renew only an already authenticated, enabled member. No passwords or device limits.
+authRouter.post("/refresh", async (c) => {
+  const auth = await authUserFromReq(c)
+  if (!auth || auth.user.disabled || auth.user.role !== 0 || !c.env?.STUDIO_MEMBER_SESSION_DAYS) {
+    return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  }
+  const user = auth.user
+  const payload = {
+    id: user.id, username: user.username, role: user.role,
+    exp: Math.floor(Date.now() / 1000) + studioSessionSeconds(c.env, user.role),
+    jti: generateJti(),
+  }
+  const token = await sign(payload, await getJwtSecret(c))
+  // Other devices and in-flight requests retain their independent, valid sessions.
+  c.header("Cache-Control", "no-store")
+  return c.json({ code: 200, message: "success", data: { token, expires_at: payload.exp } })
 })
 
 // POST /api/me/update or /me/update

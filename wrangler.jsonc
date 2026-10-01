@@ -26,7 +26,8 @@
     "ALLOW_URLS": "https://xiaolubbstudio.github.io,https://xczstudio-openlist-trial.eliya-activation-cloud.workers.dev",
     "STUDIO_API_PER_MINUTE": "300",
     "STUDIO_LOGIN_FAILURES": "5",
-    "STUDIO_LOGIN_LOCK_SECONDS": "900"
+    "STUDIO_LOGIN_LOCK_SECONDS": "900",
+    "STUDIO_MEMBER_SESSION_DAYS": "180"
   },
   "d1_databases": [
     {
