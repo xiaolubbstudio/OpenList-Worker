@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
-import { getDb, getKvStatus } from "../internal/model/db"
+import { getDb, getKvStatus, getStoreStatus } from "../internal/model/db"
 import { isServerlessRuntime, NO_STORAGE_MESSAGE } from "../internal/model/store/backend"
 import { fsRouter } from "./fs"
 import {
@@ -249,7 +249,12 @@ export function setupRouter(app: Hono) {
 
     let kv: any
     try {
-      kv = await getKvStatus(c.env)
+      if ((c.env as any)?.DB_DRIVER === "d1") {
+        const store = await getStoreStatus(c.env)
+        kv = { configured: store.driver === "d1", connected: !!store.connected, platform: store.driver, error: store.error || store.configError || null }
+      } else {
+        kv = await getKvStatus(c.env)
+      }
     } catch (err: any) {
       healthy = false
       kv = {

@@ -1,3 +1,13 @@
+# 小橙子素材库云端试验
+
+独立 Cloudflare Worker：`xczstudio-openlist-trial`；独立 D1 数据库；`sql` 格式，`aes-256-gcm` 加密。部署 Secret 仅在 Cloudflare 保存，不进入源码。
+
+此分支收窄依赖到后台所需软件，使用官方发布的 4.2.6 前端，通过 ADMIN_PASS 初始化管理员。公开初始化入口已关闭；未配置 JWT_SECRET 时后台返回 503。移动云盘上传尚未实现，已改为明确失败，不能以 HTTP 200 作为上传成功。当前只验收登录、目录与下载，尚未迁移生产素材库。
+
+重建：`npm ci --ignore-scripts` → `npm run build` → `npm run deploy`。部署前自动检查 Worker 名称、账号及独立 D1 ID，禁止绑定其他 Worker、KV、R2 或 Durable Object。不要删除已有 Cloudflare Secrets 或复用插件激活服务的数据库。素材库和插件服务只共享 Cloudflare 账号额度。
+
+以下保留上游说明及 AGPL 许可；完整修改源码位于本仓库。
+
 <div align="center">
   <img src="https://raw.githubusercontent.com/OpenListTeam/Logo/main/logo.svg" width="128" height="128" alt="logo" />
 

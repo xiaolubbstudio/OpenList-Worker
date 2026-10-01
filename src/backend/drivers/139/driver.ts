@@ -249,7 +249,7 @@ export class Yun139Driver implements StorageDriver {
     physicalPath: string,
     content: Buffer | Uint8Array,
   ): Promise<void> {
-    console.warn(`[139] put for ${physicalPath}`)
+    throw new Error("139Yun upload is not implemented in this Worker driver")
   }
 
   async getDetails(): Promise<{ total_space?: number; used_space?: number }> {

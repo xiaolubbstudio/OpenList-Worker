@@ -226,6 +226,11 @@ export async function revokeToken(
   env: any,
 ): Promise<void> {
   if (!jti) return
+  if (env?.DB_DRIVER === "d1" && env?.DB?.prepare) {
+    const { revokeD1Token } = await import("./studio-token-revocation")
+    await revokeD1Token(env.DB, jti, exp)
+    return
+  }
   revokedJtis.add(jti)
   try {
     const { getKvBinding } = await import("../internal/model/db")
@@ -267,6 +272,10 @@ export async function revokeToken(
 
 export async function isTokenRevoked(jti: string, env: any): Promise<boolean> {
   if (!jti) return false
+  if (env?.DB_DRIVER === "d1" && env?.DB?.prepare) {
+    const { isD1TokenRevoked } = await import("./studio-token-revocation")
+    return isD1TokenRevoked(env.DB, jti)
+  }
   await ensureRevokedLoaded(env)
   return revokedJtis.has(jti)
 }

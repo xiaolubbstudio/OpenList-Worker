@@ -6,5 +6,10 @@ import { OpenListDB } from "./durable-objects/OpenListDB"
 export { OpenListDB }
 
 export default {
-  fetch: app.fetch,
+  fetch(request: Request, env: any, ctx: any) {
+    // Do not expose first-owner setup before deployment secrets are installed.
+    if (!env.JWT_SECRET) return new Response("Backend initialization in progress", { status: 503 });
+    if (new URL(request.url).pathname === "/api/public/init/setup") return Response.json({code:403,message:"Administrator setup is managed by deployment",data:null},{status:403});
+    return app.fetch(request, env, ctx);
+  },
 }
