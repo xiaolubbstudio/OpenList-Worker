@@ -232,7 +232,38 @@ export class Yun139Driver implements StorageDriver {
     srcPhys: string,
     dstPhys: string,
   ): Promise<void> {
-    console.warn(`[139] move from ${srcPhys} to ${dstPhys}`)
+    if (!this.client.isPersonalNew()) throw new Error("Move is unsupported for this storage")
+    const item = await this.get(srcPhys, srcPhys)
+    await this.studioRelocate(srcPhys, dstPhys, item.sign)
+  }
+
+  async studioEnsureDirectory(physicalPath: string): Promise<void> {
+    const clean = this.cleanPath(physicalPath), name = clean.split("/").at(-1)!
+    const parentPath = clean.slice(0, clean.lastIndexOf("/")) || "/"
+    const id = await this.resolveCatalogId(parentPath, true), disk = await this.client.listFiles(id)
+    if (disk.folders.some(f => f.catalogName === name)) return
+    if (disk.files.some(f => f.contentName === name)) throw new Error("Destination is a file")
+    await this.client.createCatalog(id, name)
+    const after = await this.client.listFiles(id)
+    if (!after.folders.some(f => f.catalogName === name)) throw new Error("Directory creation not confirmed")
+  }
+
+  async studioRelocate(sourcePath: string, destinationPath: string, uid: string): Promise<void> {
+    if (!this.client.isPersonalNew()) throw new Error("Move is unsupported for this storage")
+    const source = this.cleanPath(sourcePath), destination = this.cleanPath(destinationPath)
+    const dir = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/"
+    const sourceId = await this.resolveCatalogId(dir(source), true), destinationId = await this.resolveCatalogId(dir(destination), true)
+    const name = destination.split("/").at(-1)!, before = await this.client.listFiles(destinationId)
+    const target = before.files.find(f => f.contentName === name)
+    if (target && target.contentID !== uid || before.folders.some(f => f.catalogName === name)) throw new Error("Destination conflict; no file overwritten")
+    // Retrying after a lost response is safe when the same immutable cloud file is already there.
+    if (!target) {
+      const disk = await this.client.listFiles(sourceId)
+      if (!disk.files.some(f => f.contentID === uid && f.contentName === source.split("/").at(-1))) throw new Error("Source file changed")
+      await this.client.request("/file/batchMove", { fileIds: [uid], toParentFileId: destinationId })
+    }
+    const after = await this.client.listFiles(destinationId), remaining = await this.client.listFiles(sourceId)
+    if (!after.files.some(f => f.contentID === uid && f.contentName === name) || sourceId !== destinationId && remaining.files.some(f => f.contentID === uid)) throw new Error("Cloud move not confirmed; retry")
   }
 
   async copy(

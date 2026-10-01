@@ -5,6 +5,7 @@ import { resolvePath } from "../internal/model/db"
 import { getDriver } from "../internal/op/storage"
 import { Yun139Driver } from "../drivers/139/driver"
 import { getNearestMeta, canAccess, canWrite as canWriteMeta } from "../pkg/meta"
+import { validFolder, validName, registerStudioUpload } from "./studio-catalog"
 
 // Stateless encrypted tickets survive Worker restarts. Tickets carry no cloud credentials.
 export const studioUploadRouter = new Hono()
@@ -45,15 +46,17 @@ studioUploadRouter.post("/start", async c => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return denied(c)
   try {
-    const { path, name, size, sha256 } = await c.req.json()
+    const { path, name, size, sha256, virtual_folder } = await c.req.json()
     if (!validUploadPath(path) || typeof name !== "string" || !name || name.length > 255 || /[\\/\u0000-\u001f]/.test(name) || [".", ".."].includes(name) ||
         !Number.isSafeInteger(size) || size < 1 || size > maxFile || !/^[a-f0-9]{64}$/i.test(sha256)) return failed(c)
     const { actual, resolved, driver } = await target(user, path)
+    if (virtual_folder !== undefined && (!validFolder(virtual_folder) || !validName(name))) return failed(c)
     // Check the encryption key before creating anything upstream.
     await key(c)
-    const state = await driver.beginStudioUpload(resolved.physical!, name, size, sha256)
+    const storedName = virtual_folder === undefined ? name : crypto.randomUUID() + (name.includes('.') ? '.' + name.split('.').at(-1) : '')
+    const state = await driver.beginStudioUpload(resolved.physical!, storedName, size, sha256)
     const ticket = await seal(c, { state, path, actual, storage: resolved.storage!.id,
-      user: user.id, username: user.username, expires: Date.now() + 4 * 3600000 })
+      user: user.id, username: user.username, virtualFolder: virtual_folder, displayName: name, expires: Date.now() + 4 * 3600000 })
     return c.json({ code: 200, message: "success", data: { ticket, chunkSize: state.chunkSize, name: state.name, ready: state.ready } })
   } catch { return failed(c) }
 })
@@ -63,7 +66,7 @@ async function validate(c: any, user: any, ticket: unknown) {
   const resolved = await target(user, data.path)
   if (resolved.actual !== data.actual || resolved.resolved.storage!.id !== data.storage) throw new Error("Upload destination changed")
   await resolved.driver.checkStudioDestination(resolved.resolved.physical!, data.state)
-  return { ...resolved, state: data.state }
+  return { ...resolved, state: data.state, data }
 }
 studioUploadRouter.post("/part_link", async c => {
   const user = await getUserFromContext(c)
@@ -81,8 +84,13 @@ studioUploadRouter.post("/finish", async c => {
   if (!canWrite(user)) return denied(c)
   try {
     const { ticket } = await c.req.json()
-    const { driver, state } = await validate(c, user, ticket)
+    const { driver, state, data } = await validate(c, user, ticket)
     const file = await driver.finishStudioUpload(state)
+    if (data.virtualFolder !== undefined) {
+      const item = await driver.get(data.actual + '/' + file.name, (await target(user, data.path)).resolved.physical!.replace(/\/$/, '') + '/' + file.name)
+      await registerStudioUpload(c, user, data.path, item, data.virtualFolder, data.displayName)
+      return c.json({ code: 200, message: "success", data: { name: data.displayName, size: file.size } })
+    }
     return c.json({ code: 200, message: "success", data: file })
   } catch { return failed(c) }
 })

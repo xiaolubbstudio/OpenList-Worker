@@ -4,6 +4,20 @@ import { Yun139Driver } from "./driver"
 import { Yun139Addition } from "./types"
 import { calSign } from "./util"
 
+test('139 real relocation verifies destination, refuses overwrite, and retries without a second move', async () => {
+  const driver = new Yun139Driver({ type: 'personal_new', authorization: 'fixture' } as any)
+  const cloud: any = { '/': { folders: [{ catalogID: 'trash', catalogName: '被移除的文件' }], files: [{ contentID: 'one', contentName: 'one.png' }] }, trash: { folders: [], files: [] } }
+  const client = (driver as any).client; let calls = 0
+  client.listFiles = async (id: string) => structuredClone(cloud[id])
+  client.request = async (route: string, body: any) => { assert.equal(route, '/file/batchMove'); assert.deepEqual(body, { fileIds: ['one'], toParentFileId: 'trash' }); calls++; cloud.trash.files.push(cloud['/'].files.pop()); return { success: true } }
+  await driver.studioRelocate('/one.png', '/被移除的文件/one.png', 'one')
+  await driver.studioRelocate('/one.png', '/被移除的文件/one.png', 'one')
+  assert.equal(calls, 1)
+  cloud.trash.files[0].contentID = 'other'
+  await assert.rejects(driver.studioRelocate('/one.png', '/被移除的文件/one.png', 'one'), /conflict/)
+  assert.equal(calls, 1)
+})
+
 test("Yun139 calculation and signing", () => {
   const sign = calSign("{}", "2026-08-24 16:00:00", "1234567890abcdef")
   assert.ok(sign)
