@@ -8,6 +8,10 @@
   ],
   "workers_dev": true,
   "preview_urls": false,
+  "placement": {
+    "mode": "targeted",
+    "region": "aws:us-west-1"
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
