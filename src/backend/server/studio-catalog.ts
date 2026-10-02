@@ -39,7 +39,7 @@ export async function catalogTables(db: any) {
     ]).then(async () => {
       // missing marks files the last cloud inventory did not see, so a list can be served from D1 alone.
       const columns = async () => ((await db.prepare("PRAGMA table_info(studio_assets)").all()).results || []).map((c: any) => c.name)
-      for (const [name, sql] of [["missing", "missing INTEGER NOT NULL DEFAULT 0"], ["uploader", "uploader TEXT NOT NULL DEFAULT ''"]]) {
+      for (const [name, sql] of [["missing", "missing INTEGER NOT NULL DEFAULT 0"], ["uploader", "uploader TEXT NOT NULL DEFAULT ''"], ["sort_order", "sort_order INTEGER"]]) {
         if ((await columns()).includes(name)) continue
         // Another instance may add the column first; only a column that is still absent is an error.
         try { await db.prepare(`ALTER TABLE studio_assets ADD COLUMN ${sql}`).run() } catch (e) { if (!(await columns()).includes(name)) throw e }
@@ -170,8 +170,8 @@ async function snapshot(ctx: any) {
   const favorites = ((await ctx.db.prepare("SELECT asset_id FROM studio_favorites WHERE scope=? AND username=?").bind(ctx.scope, ctx.user.username).all()).results || []).map((r: any) => r.asset_id)
   return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
 }
-const ids = (value: unknown) => {
-  if (!Array.isArray(value) || !value.length || value.length > 500 || value.some(v => typeof v !== "string" || !v || v.length > 1100)) throw new CatalogError(400, "素材选择无效。")
+const ids = (value: unknown, max = 500) => {
+  if (!Array.isArray(value) || !value.length || value.length > max || value.some(v => typeof v !== "string" || !v || v.length > 1100)) throw new CatalogError(400, "素材选择无效。")
   return [...new Set(value as string[])]
 }
 async function syncLocked(ctx: any) {
@@ -256,7 +256,7 @@ studioCatalogRouter.post("/edit", c => run(c, async (ctx, body) => {
   const extension = (n: string) => n.lastIndexOf('.') > 0 ? n.slice(n.lastIndexOf('.')).toLowerCase() : ''
   if (extension(name) !== extension(row.name)) throw new CatalogError(400, "请保留原文件扩展名。")
   await folderExists(ctx, folder)
-  await ctx.db.prepare("UPDATE studio_assets SET name=?,folder=?,revision=revision+1 WHERE scope=? AND id=?").bind(name, folder, ctx.scope, row.id).run()
+  await ctx.db.prepare("UPDATE studio_assets SET name=?1,folder=?2,sort_order=CASE WHEN folder=?2 THEN sort_order END,revision=revision+1 WHERE scope=?3 AND id=?4").bind(name, folder, ctx.scope, row.id).run()
   return { id: row.id }
 }, true))
 studioCatalogRouter.post("/trash", c => run(c, async (ctx, body) => {
@@ -311,13 +311,23 @@ studioCatalogRouter.post("/move", c => run(c, async (ctx, body) => {
     if (row.deleted || row.pending_path) throw new CatalogError(409, "请先恢复素材或重试未完成的移动。")
     await authorizePath(ctx, row.original_path, true); await authorizePath(ctx, row.source_path, true)
   }
-  await ctx.db.prepare("UPDATE studio_assets SET folder=?,revision=revision+1 WHERE scope=? AND id IN (SELECT value FROM json_each(?))").bind(folder, ctx.scope, JSON.stringify(selected)).run()
+  await ctx.db.prepare("UPDATE studio_assets SET folder=?1,sort_order=CASE WHEN folder=?1 THEN sort_order END,revision=revision+1 WHERE scope=?2 AND id IN (SELECT value FROM json_each(?3))").bind(folder, ctx.scope, JSON.stringify(selected)).run()
   return { moved: found.length }
+}, true))
+// Manual order is shared by all members and kept per folder; the website sends one group's whole sequence.
+studioCatalogRouter.post("/order", c => run(c, async (ctx, body) => {
+  const selected = ids(body.ids, 5000), folder = body.folder
+  if (!validFolder(folder)) throw new CatalogError(400, "文件夹路径无效。")
+  const found = ((await ctx.db.prepare("SELECT id,folder,deleted,pending_path FROM studio_assets WHERE scope=? AND id IN (SELECT value FROM json_each(?))").bind(ctx.scope, JSON.stringify(selected)).all()).results || []) as any[]
+  if (found.length !== selected.length || found.some(row => row.folder !== folder || row.deleted || row.pending_path)) throw new CatalogError(409, "部分素材已变化，请刷新后重试。")
+  await ctx.db.prepare("UPDATE studio_assets SET sort_order=(SELECT key FROM json_each(?2) WHERE value=studio_assets.id) WHERE scope=?1 AND id IN (SELECT value FROM json_each(?2))").bind(ctx.scope, JSON.stringify(selected)).run()
+  return { ordered: selected.length }
 }, true))
 // Favorites belong to the member account, so phone and computer show the same hearts.
 studioCatalogRouter.post("/favorite", async c => {
   try {
     const body = await c.req.json(), ctx = await context(c, body), selected = ids(body.ids)
+    if (!canWrite(ctx.user)) throw new CatalogError(403, "只看账号不能收藏。")
     if (body.on === true) await ctx.db.prepare("INSERT OR IGNORE INTO studio_favorites(scope,username,asset_id,created_ms) SELECT ?,?,id,? FROM studio_assets WHERE scope=? AND id IN (SELECT value FROM json_each(?))").bind(ctx.scope, ctx.user.username, Date.now(), ctx.scope, JSON.stringify(selected)).run()
     else await ctx.db.prepare("DELETE FROM studio_favorites WHERE scope=? AND username=? AND asset_id IN (SELECT value FROM json_each(?))").bind(ctx.scope, ctx.user.username, JSON.stringify(selected)).run()
     return c.json({ code: 200, message: "success", data: { success: true } })

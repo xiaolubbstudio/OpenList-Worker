@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const files = ['index.html','styles.css','workspace.css','brand.css','dark.css','dock.css','motion.css','fluent.css','island.css','app.js','motion.js','preview-cache.js','pcloud-auth.js','auth-callback.js','pcloud-client.js','google-drive-client.js','google-drive-auth.js','openlist-client.js','openlist-auth.js','upload-drop.js','auth.html','data/catalog.js']
+const files = ['index.html','styles.css','workspace.css','brand.css','dark.css','dock.css','motion.css','fluent.css','island.css','app.js','motion.js','presence.js','delight.js','preview-cache.js','pcloud-auth.js','auth-callback.js','pcloud-client.js','google-drive-client.js','google-drive-auth.js','openlist-client.js','openlist-auth.js','upload-drop.js','auth.html','data/catalog.js']
 const assets = ['orange.svg','sunset.svg','landscape.svg','orbit.svg','chime.wav','studio-face.png','ui-icons.svg','Phosphor-LICENSE.txt','surface-grain.svg']
 const source = process.env.STUDIO_WEBSITE_DIR ? path.resolve(process.env.STUDIO_WEBSITE_DIR) : path.resolve(root,'../..')
 const local = await fs.stat(path.join(source,'index.html')).then(s=>s.isFile()).catch(()=>false)

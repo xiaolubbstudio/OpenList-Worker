@@ -33,6 +33,22 @@
     "STUDIO_LOGIN_LOCK_SECONDS": "900",
     "STUDIO_MEMBER_SESSION_DAYS": "180"
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "STUDIO_PRESENCE",
+        "class_name": "StudioPresence"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "studio-presence-v1",
+      "new_sqlite_classes": [
+        "StudioPresence"
+      ]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
