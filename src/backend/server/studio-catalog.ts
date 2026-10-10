@@ -170,8 +170,10 @@ async function snapshot(ctx: any) {
     assets.push({ ...safe, pending: !!pending_path })
   }
   const favorites = ((await ctx.db.prepare("SELECT asset_id FROM studio_favorites WHERE scope=? AND username=?").bind(ctx.scope, ctx.user.username).all()).results || []).map((r: any) => r.asset_id)
+  const paths = (await folders(ctx)).map((r: any) => r.path)
+  const canManage = canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope)
   const space = await storageSpace(ctx, assets).catch(() => catalogSpace(assets))
-  return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, space, canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
+  return { assets, folders: paths, favorites, space, canManage }
 }
 function catalogSpace(assets: any[]) {
   return { total: 20 * 1024 ** 3, used: assets.reduce((sum, row) => sum + Math.max(0, Number(row.size) || 0), 0), source: "catalog", updatedAt: 0, refreshing: false }

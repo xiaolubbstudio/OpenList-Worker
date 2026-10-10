@@ -197,5 +197,15 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     finishQuota(); await Promise.all(quotaBackground)
     await request('list')
     assert.equal(quotaGets, 2, 'a failed quota read backs off rather than retrying on every list')
+    const prepare = env.DB.prepare
+    env.DB.prepare = (query: string) => {
+      if (query.includes('studio_storage_space')) throw Error('quota database unavailable')
+      return prepare(query)
+    }
+    const unaffected = await request('list')
+    assert.equal(unaffected.status, 200, 'optional quota failures never hide the directory')
+    assert.ok(unaffected.json.data.assets.length > 0)
+    assert.equal(unaffected.json.data.space.source, 'catalog')
+    env.DB.prepare = prepare
   } finally { Object.assign(proto, original); sql.close(); __resetDbCacheForTest() }
 })
