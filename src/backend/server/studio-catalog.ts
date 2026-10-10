@@ -347,6 +347,22 @@ studioCatalogRouter.post("/resolve", async c => {
     if (!row || row.deleted || row.pending_path) throw new CatalogError(404, "素材已移除或移动尚未确认，请刷新目录。")
     await authorizePath(ctx, row.original_path); await authorizePath(ctx, row.source_path)
     const { driver, resolved } = await driverFor(ctx, row.source_path)
+    if (body.preview === true) {
+      // Renew a failed thumbnail without requesting video originals or relying on D1's old URL.
+      const parent = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/"
+      const items = await driver.list(parent(row.source_path), parent(resolved.physical!))
+      const file = items.find((item: any) => item.sign === row.uid && !item.is_dir && item.name === row.source_path.split("/").at(-1))
+      if (!file) throw new CatalogError(409, "原文件已变化，请刷新目录。")
+      let previewUrl = file.thumb || ""
+      // Small browser-readable images can stand in when the cloud has no thumbnail.
+      if (!previewUrl && file.size <= 4 * 1048576 && /\.(png|jpe?g|jfif|webp|gif|apng|avif|bmp|ico)$/i.test(file.name)) {
+        const original = await driver.get(row.source_path, resolved.physical!)
+        if (original.sign !== row.uid) throw new CatalogError(409, "原文件已变化，请刷新目录。")
+        previewUrl = original.raw_url || ""
+      }
+      await flushPendingDriverState(resolved.storage!.driver, resolved.storage, driver, ctx.requestContext)
+      return c.json({ code: 200, message: "success", data: { preview_url: previewUrl } })
+    }
     const item = await driver.get(row.source_path, resolved.physical!)
     if (item.sign !== row.uid || !item.raw_url) throw new CatalogError(409, "原文件已变化，请刷新目录。")
     await flushPendingDriverState(resolved.storage!.driver, resolved.storage, driver, ctx.requestContext)

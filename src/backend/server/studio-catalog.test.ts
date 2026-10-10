@@ -40,9 +40,9 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
   const cloud = new Map<string, any[]>([['/', [{ name: '旧文件夹', sign: 'dir-1', is_dir: true, size: 0, modified: '' }]], ['/旧文件夹', [{ name: '原图.png', sign: 'file-1', is_dir: false, size: 600, modified: '2026-10-02', thumb: '' }]]])
   const proto: any = Yun139Driver.prototype, original = Object.fromEntries(['init', 'list', 'get', 'studioEnsureDirectory', 'studioRelocate'].map(k => [k, proto[k]]))
   proto.init = async () => {}
-  let cloudLists = 0
+  let cloudLists = 0, cloudGets = 0
   proto.list = async (_v: string, physical: string) => { cloudLists++; return structuredClone(cloud.get(physical) || []) }
-  proto.get = async (_v: string, physical: string) => ({ ...cloud.get(physical.slice(0, physical.lastIndexOf('/')) || '/')?.find(f => f.name === physical.split('/').at(-1)), raw_url: 'https://download.yun.139.com/fixture.png' })
+  proto.get = async (_v: string, physical: string) => { cloudGets++; return { ...cloud.get(physical.slice(0, physical.lastIndexOf('/')) || '/')?.find(f => f.name === physical.split('/').at(-1)), raw_url: 'https://download.yun.139.com/fixture.png' } }
   proto.studioEnsureDirectory = async (path: string) => { if (!cloud.has(path)) cloud.set(path, []) }
   let moveFails = false
   proto.studioRelocate = async (source: string, destination: string, uid: string) => {
@@ -64,6 +64,21 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal((await request('list', { path: '/../' })).status, 400)
     const initial = await request('list'); assert.equal(initial.status, 200, initial.json.message)
     const file = initial.json.data.assets[0]; assert.equal(file.name, '原图.png')
+    assert.equal((await request('resolve', { id: file.id, preview: true }, null)).status, 401)
+    const source = cloud.get('/旧文件夹')![0]
+    source.thumb = 'https://download.yun.139.com/fresh-thumb.jpg'
+    const thumb = await request('resolve', { id: file.id, preview: true }, reader)
+    assert.equal(thumb.status, 200); assert.deepEqual(thumb.json.data, { preview_url: source.thumb })
+    assert.equal(cloudGets, 0, 'thumbnail recovery never asks for an original download when a fresh thumb exists')
+    source.thumb = ''
+    assert.equal((await request('resolve', { id: file.id, preview: true }, reader)).json.data.preview_url, 'https://download.yun.139.com/fixture.png', 'small image without a thumbnail is viewable')
+    assert.equal(cloudGets, 1)
+    source.size = 8 * 1048576
+    assert.equal((await request('resolve', { id: file.id, preview: true })).json.data.preview_url, '')
+    assert.equal(cloudGets, 1, 'large image originals are never downloaded automatically')
+    source.size = 600; source.sign = 'changed-file'
+    assert.equal((await request('resolve', { id: file.id, preview: true })).status, 409, 'a file replaced at the same path is not exposed as the old asset')
+    source.sign = 'file-1'
     assert.equal((await request('folder', { action: 'move', folder: '旧文件夹', next: '新文件夹' })).status, 200)
     assert.equal((await request('edit', { id: file.id, name: '新图.png', revision: file.revision })).status, 409)
     const refreshed = (await request('list')).json.data.assets[0]
@@ -79,6 +94,7 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal(cloud.get('/旧文件夹')!.length, 0)
     assert.equal(cloud.get('/被移除的文件/file-1')![0].sign, 'file-1')
     assert.equal((await request('resolve', { id: file.id })).status, 404)
+    assert.equal((await request('resolve', { id: file.id, preview: true }, reader)).status, 404)
     assert.equal((await request('restore', { id: file.id })).status, 200)
     assert.equal(cloud.get('/旧文件夹')![0].sign, 'file-1')
     const final = (await request('list')).json.data.assets[0]
@@ -120,6 +136,9 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal(uploaded.folder, '项目/片头'); assert.equal(uploaded.uploader, 'member')
     assert.equal(warehouse.assets.find((a: any) => a.name === '手机直接放的.png').folder, '', 'cloud-app drops land at the root with their readable name')
     assert.equal((await request('resolve', { id: uploaded.id })).status, 200)
+    const gets = cloudGets
+    assert.equal((await request('resolve', { id: uploaded.id, preview: true }, reader)).json.data.preview_url, '')
+    assert.equal(cloudGets, gets, 'videos without posters never auto-download their originals')
     // Batch moves are one D1 transaction; favorites follow the account, not the browser.
     const both = [uploaded.id, final.id]
     assert.equal((await request('move', { ids: both, folder: '不存在' })).status, 409)
