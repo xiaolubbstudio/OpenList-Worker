@@ -64,6 +64,7 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal((await request('list', { path: '/../' })).status, 400)
     const initial = await request('list'); assert.equal(initial.status, 200, initial.json.message)
     const file = initial.json.data.assets[0]; assert.equal(file.name, '原图.png')
+    assert.ok(file.added_ms > Date.parse('2026-10-02'), 'import records when the asset enters the library')
     assert.equal((await request('resolve', { id: file.id, preview: true }, null)).status, 401)
     const source = cloud.get('/旧文件夹')![0]
     source.thumb = 'https://download.yun.139.com/fresh-thumb.jpg'
@@ -98,6 +99,7 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal((await request('restore', { id: file.id })).status, 200)
     assert.equal(cloud.get('/旧文件夹')![0].sign, 'file-1')
     const final = (await request('list')).json.data.assets[0]
+    assert.equal(final.added_ms, file.added_ms, 'rename, folder moves, trash and restore do not turn an old asset into a new arrival')
     assert.equal(final.id, file.id); assert.equal(final.name, '新图.png'); assert.equal(final.folder, '新文件夹'); assert.equal(final.deleted, 0)
     sql.prepare("UPDATE studio_catalog_locks SET until_ms=?").run(Date.now() + 10000)
     assert.equal((await request('edit', { id: file.id, name: '冲突.png' })).status, 409, 'two instances cannot overwrite organization concurrently')
@@ -133,6 +135,7 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     const warehouse = (await request('list', { refresh: true })).json.data
     assert.equal(warehouse.folders.includes('仓库'), false)
     const uploaded = warehouse.assets.find((a: any) => a.name === '片头 动画.mp4')
+    assert.ok(uploaded.added_ms > Date.parse('2026-10-02'), 'upload stores library arrival time instead of the original file date')
     assert.equal(uploaded.folder, '项目/片头'); assert.equal(uploaded.uploader, 'member')
     assert.equal(warehouse.assets.find((a: any) => a.name === '手机直接放的.png').folder, '', 'cloud-app drops land at the root with their readable name')
     assert.equal((await request('resolve', { id: uploaded.id })).status, 200)

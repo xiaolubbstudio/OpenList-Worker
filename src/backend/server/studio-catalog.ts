@@ -39,7 +39,7 @@ export async function catalogTables(db: any) {
     ]).then(async () => {
       // missing marks files the last cloud inventory did not see, so a list can be served from D1 alone.
       const columns = async () => ((await db.prepare("PRAGMA table_info(studio_assets)").all()).results || []).map((c: any) => c.name)
-      for (const [name, sql] of [["missing", "missing INTEGER NOT NULL DEFAULT 0"], ["uploader", "uploader TEXT NOT NULL DEFAULT ''"], ["sort_order", "sort_order INTEGER"]]) {
+      for (const [name, sql] of [["missing", "missing INTEGER NOT NULL DEFAULT 0"], ["uploader", "uploader TEXT NOT NULL DEFAULT ''"], ["sort_order", "sort_order INTEGER"], ["added_ms", "added_ms INTEGER NOT NULL DEFAULT 0"]]) {
         if ((await columns()).includes(name)) continue
         // Another instance may add the column first; only a column that is still absent is an error.
         try { await db.prepare(`ALTER TABLE studio_assets ADD COLUMN ${sql}`).run() } catch (e) { if (!(await columns()).includes(name)) throw e }
@@ -98,8 +98,8 @@ export async function registerStudioUpload(c: any, user: any, path: string, file
   const relative = dir.slice(scope === "/" ? 0 : scope.length) || "/"
   await catalogTables(c.env.DB)
   await ensureVirtualFolders(c.env.DB, scope, folder)
-  await c.env.DB.prepare(`INSERT OR IGNORE INTO studio_assets(scope,id,uid,source_path,original_path,name,folder,size,modified,thumb,uploader) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(scope, "ol-" + join(relative, file.name), file.sign, join(dir, file.name), join(dir, file.name), displayName, folder, file.size, file.modified || "", file.thumb || "", String(user.username || "")).run()
+  await c.env.DB.prepare(`INSERT OR IGNORE INTO studio_assets(scope,id,uid,source_path,original_path,name,folder,size,modified,thumb,uploader,added_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(scope, "ol-" + join(relative, file.name), file.sign, join(dir, file.name), join(dir, file.name), displayName, folder, file.size, file.modified || "", file.thumb || "", String(user.username || ""), Date.now()).run()
 }
 async function sync(ctx: any) {
   // One inventory request per refresh. Import only new files; never overwrite user organization.
@@ -141,15 +141,15 @@ async function sync(ctx: any) {
           live.add(id)
           // A website upload found again (for example after restoring D1) gets its readable name back.
           const name = item.name.replace(/^(.+)__[0-9a-f]{8}(\.[^.]*)?$/, "$1$2")
-          inventory.push({ id, uid: item.sign, source_path: source, original_path: source, name, folder: dir.folder, size: item.size, modified: item.modified || "", thumb: item.thumb || "" })
+          inventory.push({ id, uid: item.sign, source_path: source, original_path: source, name, folder: dir.folder, size: item.size, modified: item.modified || "", thumb: item.thumb || "", added_ms: Date.now() })
         }
       }
     }
   }
   // JSON batches keep import under D1's free per-invocation query limit even with many files.
   if (newFolders.length) await ctx.db.prepare("INSERT OR IGNORE INTO studio_folders(scope,id,path,source_uid) SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.path'),json_extract(value,'$.uid') FROM json_each(?)").bind(ctx.scope, JSON.stringify(newFolders)).run()
-  if (inventory.length) await ctx.db.prepare(`INSERT INTO studio_assets(scope,id,uid,source_path,original_path,name,folder,size,modified,thumb)
-    SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.uid'),json_extract(value,'$.source_path'),json_extract(value,'$.original_path'),json_extract(value,'$.name'),json_extract(value,'$.folder'),json_extract(value,'$.size'),json_extract(value,'$.modified'),json_extract(value,'$.thumb') FROM json_each(?) WHERE true
+  if (inventory.length) await ctx.db.prepare(`INSERT INTO studio_assets(scope,id,uid,source_path,original_path,name,folder,size,modified,thumb,added_ms)
+    SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.uid'),json_extract(value,'$.source_path'),json_extract(value,'$.original_path'),json_extract(value,'$.name'),json_extract(value,'$.folder'),json_extract(value,'$.size'),json_extract(value,'$.modified'),json_extract(value,'$.thumb'),json_extract(value,'$.added_ms') FROM json_each(?) WHERE true
     ON CONFLICT(scope,uid) DO UPDATE SET source_path=excluded.source_path,size=excluded.size,modified=excluded.modified,thumb=excluded.thumb WHERE studio_assets.deleted=0 AND studio_assets.pending_path=''`).bind(ctx.scope, JSON.stringify(inventory)).run()
   // Trashed and in-flight rows are not in the inventory by design; only settled files can go missing.
   await ctx.db.batch([
@@ -337,7 +337,7 @@ studioCatalogRouter.post("/favorite", async c => {
 studioCatalogRouter.post("/backup", async c => {
   try {
     const body = await c.req.json(), ctx = await context(c, body, true), relative = (p: string) => p.slice(ctx.scope === "/" ? 0 : ctx.scope.length) || "/"
-    const assets = (await rows(ctx)).map((r: any) => ({ id: r.id, name: r.name, folder: r.folder, cloud_path: relative(r.source_path), original_path: relative(r.original_path), size: r.size, modified: r.modified, uploader: r.uploader, deleted: !!r.deleted, missing: !!r.missing }))
+    const assets = (await rows(ctx)).map((r: any) => ({ id: r.id, name: r.name, folder: r.folder, cloud_path: relative(r.source_path), original_path: relative(r.original_path), size: r.size, modified: r.modified, added_ms: r.added_ms, uploader: r.uploader, deleted: !!r.deleted, missing: !!r.missing }))
     return c.json({ code: 200, message: "success", data: { version: 1, exported_at: new Date().toISOString(), folders: (await folders(ctx)).map((r: any) => r.path), assets } })
   } catch (e: any) { return failure(c, e instanceof CatalogError ? e.code : 503, e instanceof CatalogError ? e.message : "目录备份失败，请稍后重试。") }
 })
