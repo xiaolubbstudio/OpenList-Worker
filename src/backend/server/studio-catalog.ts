@@ -27,6 +27,7 @@ const join = (dir: string, name: string) => (dir === "/" ? "" : dir) + "/" + nam
 const parent = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/"
 const inside = (root: string, path: string) => path === root || path.startsWith((root === "/" ? "" : root) + "/")
 const ready = new WeakMap<object, Promise<unknown>>()
+const spaceReady = new WeakMap<object, Promise<unknown>>()
 export async function catalogTables(db: any) {
   let p = ready.get(db)
   if (!p) {
@@ -35,13 +36,13 @@ export async function catalogTables(db: any) {
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_folders (scope TEXT NOT NULL, id TEXT NOT NULL, path TEXT NOT NULL, source_uid TEXT, PRIMARY KEY(scope,id), UNIQUE(scope,path), UNIQUE(scope,source_uid))`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_catalog_locks (scope TEXT PRIMARY KEY, owner TEXT NOT NULL, until_ms INTEGER NOT NULL)`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_catalog_state (scope TEXT PRIMARY KEY, synced_ms INTEGER NOT NULL)`),
-      db.prepare(`CREATE TABLE IF NOT EXISTS studio_storage_space (storage_id INTEGER PRIMARY KEY, total INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER NOT NULL DEFAULT 0, next_check_ms INTEGER NOT NULL DEFAULT 0)`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_favorites (scope TEXT NOT NULL, username TEXT NOT NULL, asset_id TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(scope,username,asset_id))`),
     ]).then(async () => {
       // missing marks files the last cloud inventory did not see, so a list can be served from D1 alone.
       const columns = async () => ((await db.prepare("PRAGMA table_info(studio_assets)").all()).results || []).map((c: any) => c.name)
+      const present = new Set(await columns())
       for (const [name, sql] of [["missing", "missing INTEGER NOT NULL DEFAULT 0"], ["uploader", "uploader TEXT NOT NULL DEFAULT ''"], ["sort_order", "sort_order INTEGER"], ["added_ms", "added_ms INTEGER NOT NULL DEFAULT 0"]]) {
-        if ((await columns()).includes(name)) continue
+        if (present.has(name)) continue
         // Another instance may add the column first; only a column that is still absent is an error.
         try { await db.prepare(`ALTER TABLE studio_assets ADD COLUMN ${sql}`).run() } catch (e) { if (!(await columns()).includes(name)) throw e }
       }
@@ -169,11 +170,22 @@ async function snapshot(ctx: any) {
     assets.push({ ...safe, pending: !!pending_path })
   }
   const favorites = ((await ctx.db.prepare("SELECT asset_id FROM studio_favorites WHERE scope=? AND username=?").bind(ctx.scope, ctx.user.username).all()).results || []).map((r: any) => r.asset_id)
-  return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, space: await storageSpace(ctx, assets), canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
+  const space = await storageSpace(ctx, assets).catch(() => catalogSpace(assets))
+  return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, space, canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
+}
+function catalogSpace(assets: any[]) {
+  return { total: 20 * 1024 ** 3, used: assets.reduce((sum, row) => sum + Math.max(0, Number(row.size) || 0), 0), source: "catalog", updatedAt: 0, refreshing: false }
 }
 // Share one quota reading across all members. Hover never makes a request, and an
 // expired quota is refreshed after the directory response rather than delaying it.
 async function storageSpace(ctx: any, assets: any[]) {
+  let setup = spaceReady.get(ctx.db)
+  if (!setup) {
+    setup = ctx.db.prepare("CREATE TABLE IF NOT EXISTS studio_storage_space (storage_id INTEGER PRIMARY KEY, total INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER NOT NULL DEFAULT 0, next_check_ms INTEGER NOT NULL DEFAULT 0)").run()
+    spaceReady.set(ctx.db, setup!)
+    setup!.catch(() => spaceReady.delete(ctx.db))
+  }
+  await setup
   const id = ctx.resolved.storage.id, now = Date.now()
   await ctx.db.prepare("INSERT OR IGNORE INTO studio_storage_space(storage_id) VALUES (?)").bind(id).run()
   let saved: any = await ctx.db.prepare("SELECT * FROM studio_storage_space WHERE storage_id=?").bind(id).first()
@@ -206,7 +218,7 @@ async function storageSpace(ctx: any, assets: any[]) {
   if (Number(saved.total) > 0 && Number(saved.updated_ms) > 0) return { total: Number(saved.total), used: Number(saved.used), source: "cloud", updatedAt: Number(saved.updated_ms), refreshing }
   // The agreed 20 GB library budget remains useful if the provider's quota API
   // is unavailable. Include trash, because moving a file there frees no bytes.
-  return { total: 20 * 1024 ** 3, used: assets.reduce((sum, row) => sum + Math.max(0, Number(row.size) || 0), 0), source: "catalog", updatedAt: 0, refreshing }
+  return { ...catalogSpace(assets), refreshing }
 }
 const ids = (value: unknown, max = 500) => {
   if (!Array.isArray(value) || !value.length || value.length > max || value.some(v => typeof v !== "string" || !v || v.length > 1100)) throw new CatalogError(400, "素材选择无效。")
