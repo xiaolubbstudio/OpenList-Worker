@@ -338,7 +338,7 @@ export class Yun139Driver implements StorageDriver {
 
   async getDetails(): Promise<{ total_space?: number; used_space?: number }> {
     try {
-      const details = await this.client.getStorageDetails()
+      const details = await this.client.getStorageDetails(AbortSignal.timeout(8000))
       return {
         total_space: details.total,
         used_space: details.used,

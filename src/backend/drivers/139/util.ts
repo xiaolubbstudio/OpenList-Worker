@@ -103,7 +103,7 @@ export class Yun139ApiClient {
     return this.personalHost
   }
 
-  async request<T = any>(uriOrUrl: string, body: any): Promise<T> {
+  async request<T = any>(uriOrUrl: string, body: any, signal?: AbortSignal): Promise<T> {
     const ts = formatTime(new Date())
     const randStr = randomString(16)
     const bodyStr = JSON.stringify(body || {})
@@ -155,6 +155,7 @@ export class Yun139ApiClient {
       method: "POST",
       headers,
       body: bodyStr,
+      signal,
     })
 
     if (!res.ok) {
@@ -418,7 +419,7 @@ export class Yun139ApiClient {
     )
   }
 
-  async getStorageDetails(): Promise<{ total?: number; used?: number }> {
+  async getStorageDetails(signal?: AbortSignal): Promise<{ total?: number; used?: number }> {
     try {
       const res = await this.request<Yun139StorageDetailsResp>(
         "/orchestration/personalCloud/catalog/v1.0/getUserDomainInfo",
@@ -428,6 +429,7 @@ export class Yun139ApiClient {
             accountType: 1,
           },
         },
+        signal,
       )
       return {
         total: res.data?.totalSize,

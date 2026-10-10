@@ -35,6 +35,7 @@ export async function catalogTables(db: any) {
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_folders (scope TEXT NOT NULL, id TEXT NOT NULL, path TEXT NOT NULL, source_uid TEXT, PRIMARY KEY(scope,id), UNIQUE(scope,path), UNIQUE(scope,source_uid))`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_catalog_locks (scope TEXT PRIMARY KEY, owner TEXT NOT NULL, until_ms INTEGER NOT NULL)`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_catalog_state (scope TEXT PRIMARY KEY, synced_ms INTEGER NOT NULL)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS studio_storage_space (storage_id INTEGER PRIMARY KEY, total INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER NOT NULL DEFAULT 0, next_check_ms INTEGER NOT NULL DEFAULT 0)`),
       db.prepare(`CREATE TABLE IF NOT EXISTS studio_favorites (scope TEXT NOT NULL, username TEXT NOT NULL, asset_id TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(scope,username,asset_id))`),
     ]).then(async () => {
       // missing marks files the last cloud inventory did not see, so a list can be served from D1 alone.
@@ -168,7 +169,44 @@ async function snapshot(ctx: any) {
     assets.push({ ...safe, pending: !!pending_path })
   }
   const favorites = ((await ctx.db.prepare("SELECT asset_id FROM studio_favorites WHERE scope=? AND username=?").bind(ctx.scope, ctx.user.username).all()).results || []).map((r: any) => r.asset_id)
-  return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
+  return { assets, folders: (await folders(ctx)).map((r: any) => r.path), favorites, space: await storageSpace(ctx, assets), canManage: canWrite(ctx.user) && metaWrite(ctx.user, await getNearestMeta(ctx.scope), ctx.scope) }
+}
+// Share one quota reading across all members. Hover never makes a request, and an
+// expired quota is refreshed after the directory response rather than delaying it.
+async function storageSpace(ctx: any, assets: any[]) {
+  const id = ctx.resolved.storage.id, now = Date.now()
+  await ctx.db.prepare("INSERT OR IGNORE INTO studio_storage_space(storage_id) VALUES (?)").bind(id).run()
+  let saved: any = await ctx.db.prepare("SELECT * FROM studio_storage_space WHERE storage_id=?").bind(id).first()
+  let refreshing = Number(saved.next_check_ms) > now && Number(saved.next_check_ms) - now <= 60000
+  if (Number(saved.next_check_ms) <= now) {
+    // A D1 compare-and-set prevents simultaneous page opens in different Workers
+    // from each asking the cloud. Failed readings back off for five minutes.
+    const claim = await ctx.db.prepare("UPDATE studio_storage_space SET next_check_ms=? WHERE storage_id=? AND next_check_ms<=?").bind(now + 60000, id, now).run()
+    if (claim.meta?.changes === 1) {
+      const pending = (async () => {
+        let total = 0, used = -1
+        try {
+          const driver: any = await getDriver(ctx.resolved.storage.driver, ctx.resolved.storage)
+          const details = await driver.getDetails()
+          total = Number(details.total_space); used = Number(details.used_space)
+        } catch { /* Keep the previous successful reading, never invent cloud free space. */ }
+        if (Number.isSafeInteger(total) && total > 0 && Number.isSafeInteger(used) && used >= 0) {
+          await ctx.db.prepare("UPDATE studio_storage_space SET total=?,used=?,updated_ms=?,next_check_ms=? WHERE storage_id=? AND next_check_ms=?").bind(total, used, Date.now(), Date.now() + 15 * 60000, id, now + 60000).run()
+        } else {
+          await ctx.db.prepare("UPDATE studio_storage_space SET next_check_ms=? WHERE storage_id=? AND next_check_ms=?").bind(Date.now() + 5 * 60000, id, now + 60000).run()
+        }
+      })().catch(() => {})
+      try { ctx.c.executionCtx.waitUntil(pending); refreshing = true } catch {
+        await pending
+        saved = await ctx.db.prepare("SELECT * FROM studio_storage_space WHERE storage_id=?").bind(id).first()
+        refreshing = false
+      }
+    }
+  }
+  if (Number(saved.total) > 0 && Number(saved.updated_ms) > 0) return { total: Number(saved.total), used: Number(saved.used), source: "cloud", updatedAt: Number(saved.updated_ms), refreshing }
+  // The agreed 20 GB library budget remains useful if the provider's quota API
+  // is unavailable. Include trash, because moving a file there frees no bytes.
+  return { total: 20 * 1024 ** 3, used: assets.reduce((sum, row) => sum + Math.max(0, Number(row.size) || 0), 0), source: "catalog", updatedAt: 0, refreshing }
 }
 const ids = (value: unknown, max = 500) => {
   if (!Array.isArray(value) || !value.length || value.length > max || value.some(v => typeof v !== "string" || !v || v.length > 1100)) throw new CatalogError(400, "素材选择无效。")

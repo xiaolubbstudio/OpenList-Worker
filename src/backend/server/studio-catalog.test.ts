@@ -38,9 +38,11 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
   __setStoreBackendLoaderForTest(async () => ({ name: 'fixture', isConfigured: async () => true, load: async () => structuredClone(config), save: async (next: any) => { config = structuredClone(next); return true } }))
   setEnvCtx(env)
   const cloud = new Map<string, any[]>([['/', [{ name: '旧文件夹', sign: 'dir-1', is_dir: true, size: 0, modified: '' }]], ['/旧文件夹', [{ name: '原图.png', sign: 'file-1', is_dir: false, size: 600, modified: '2026-10-02', thumb: '' }]]])
-  const proto: any = Yun139Driver.prototype, original = Object.fromEntries(['init', 'list', 'get', 'studioEnsureDirectory', 'studioRelocate'].map(k => [k, proto[k]]))
+  const proto: any = Yun139Driver.prototype, original = Object.fromEntries(['init', 'list', 'get', 'getDetails', 'studioEnsureDirectory', 'studioRelocate'].map(k => [k, proto[k]]))
   proto.init = async () => {}
   let cloudLists = 0, cloudGets = 0
+  let quotaGets = 0
+  proto.getDetails = async () => { quotaGets++; return { total_space: 20 * 1024 ** 3, used_space: 4 * 1024 ** 3 } }
   proto.list = async (_v: string, physical: string) => { cloudLists++; return structuredClone(cloud.get(physical) || []) }
   proto.get = async (_v: string, physical: string) => { cloudGets++; return { ...cloud.get(physical.slice(0, physical.lastIndexOf('/')) || '/')?.find(f => f.name === physical.split('/').at(-1)), raw_url: 'https://download.yun.139.com/fixture.png' } }
   proto.studioEnsureDirectory = async (path: string) => { if (!cloud.has(path)) cloud.set(path, []) }
@@ -63,6 +65,9 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal((await request('folder', { action: 'create', folder: '禁止' }, reader)).status, 403)
     assert.equal((await request('list', { path: '/../' })).status, 400)
     const initial = await request('list'); assert.equal(initial.status, 200, initial.json.message)
+    assert.equal(initial.json.data.space.source, 'cloud')
+    assert.equal(initial.json.data.space.total, 20 * 1024 ** 3)
+    assert.equal(initial.json.data.space.used, 4 * 1024 ** 3)
     const file = initial.json.data.assets[0]; assert.equal(file.name, '原图.png')
     assert.ok(file.added_ms > Date.parse('2026-10-02'), 'import records when the asset enters the library')
     assert.equal((await request('resolve', { id: file.id, preview: true }, null)).status, 401)
@@ -172,5 +177,25 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal(backup.status, 200)
     assert.equal(backup.json.data.assets.find((a: any) => a.id === uploaded.id).cloud_path, '/仓库/' + stored)
     assert.equal((await request('backup', {}, reader)).status, 403)
+    assert.equal(quotaGets, 1, 'all members, refreshes and folder edits share the same quota cache')
+    // Slow quota reads never hold up a directory response. A competing member
+    // serves the cache without starting a second cloud query.
+    await request('trash', { id: uploaded.id })
+    sql.prepare('UPDATE studio_storage_space SET total=0,used=0,updated_ms=0,next_check_ms=0').run()
+    let finishQuota!: () => void
+    const quotaGate = new Promise<void>(resolve => { finishQuota = resolve })
+    proto.getDetails = async () => { quotaGets++; await quotaGate; return {} }
+    const quotaBackground: Promise<unknown>[] = []
+    const execution = { waitUntil: (p: Promise<unknown>) => quotaBackground.push(p), passThroughOnException() {} }
+    const approximate = await request('list', {}, token, execution)
+    assert.equal(approximate.status, 200)
+    assert.equal(approximate.json.data.space.source, 'catalog')
+    assert.equal(approximate.json.data.space.refreshing, true)
+    assert.equal(approximate.json.data.space.used, 635, 'catalog fallback includes the 30-byte trashed original and excludes the missing file')
+    await request('list', {}, reader, execution)
+    assert.equal(quotaGets, 2, 'a D1 claim shares in-flight readings across members')
+    finishQuota(); await Promise.all(quotaBackground)
+    await request('list')
+    assert.equal(quotaGets, 2, 'a failed quota read backs off rather than retrying on every list')
   } finally { Object.assign(proto, original); sql.close(); __resetDbCacheForTest() }
 })
