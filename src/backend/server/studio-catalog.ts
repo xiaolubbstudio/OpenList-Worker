@@ -5,6 +5,7 @@ import { getNearestMeta, canAccess, canWrite as metaWrite, isHidden } from "../p
 import { resolvePath } from "../internal/model/db"
 import { listItems, getDriver, flushPendingDriverState } from "../internal/op/storage"
 import { Yun139Driver } from "../drivers/139/driver"
+import { CLIP_DIRECTORY, ClipError, resolveClip } from "./studio-preview-clip"
 
 export const studioCatalogRouter = new Hono()
 export const TRASH = "被移除的文件"
@@ -21,7 +22,7 @@ export function validName(v: unknown): v is string {
   return typeof v === "string" && v.trim() === v && !!v && v.length <= 255 && !/[\\/\u0000-\u001f]/.test(v) && ![".", ".."].includes(v)
 }
 export function validFolder(v: unknown): v is string {
-  return typeof v === "string" && v.length <= 1024 && (v === "" || v.split("/").every(validName)) && v.split("/")[0] !== TRASH
+  return typeof v === "string" && v.length <= 1024 && (v === "" || v.split("/").every(validName)) && ![TRASH, CLIP_DIRECTORY].includes(v.split("/")[0])
 }
 const join = (dir: string, name: string) => (dir === "/" ? "" : dir) + "/" + name
 const parent = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/"
@@ -120,7 +121,7 @@ async function sync(ctx: any) {
       const source = join(dir.path, item.name)
       try { await authorizePath(ctx, source) } catch { continue }
       if (item.is_dir) {
-        if (dir.path === ctx.scope && item.name === TRASH) continue
+        if (dir.path === ctx.scope && [TRASH, CLIP_DIRECTORY].includes(item.name)) continue
         // The warehouse is storage, not organization: files dropped there directly appear at the library root.
         if (dir.path === ctx.scope && item.name === WAREHOUSE) { queue.push({ path: source, folder: "" }); continue }
         let folder = knownDirs.get(item.sign) as string | undefined
@@ -407,7 +408,7 @@ studioCatalogRouter.post("/resolve", async c => {
       if (!file) throw new CatalogError(409, "原文件已变化，请刷新目录。")
       let previewUrl = file.thumb || ""
       // Small browser-readable images can stand in when the cloud has no thumbnail.
-      if (!previewUrl && file.size <= 4 * 1048576 && /\.(png|jpe?g|jfif|webp|gif|apng|avif|bmp|ico)$/i.test(file.name)) {
+      if (!previewUrl && file.size <= 4 * 1048576 && /\.(png|jpe?g|jfif|webp|avif|bmp|ico)$/i.test(file.name)) {
         const original = await driver.get(row.source_path, resolved.physical!)
         if (original.sign !== row.uid) throw new CatalogError(409, "原文件已变化，请刷新目录。")
         previewUrl = original.raw_url || ""
@@ -420,4 +421,13 @@ studioCatalogRouter.post("/resolve", async c => {
     await flushPendingDriverState(resolved.storage!.driver, resolved.storage, driver, ctx.requestContext)
     return c.json({ code: 200, message: "success", data: { raw_url: item.raw_url } })
   } catch (e: any) { return failure(c, e instanceof CatalogError ? e.code : 503, e instanceof CatalogError ? e.message : "无法获取原文件，请稍后重试。") }
+})
+studioCatalogRouter.post("/clip", async c => {
+  try {
+    const body = await c.req.json(), ctx = await context(c, body), row: any = await ctx.db.prepare("SELECT * FROM studio_assets WHERE scope=? AND id=?").bind(ctx.scope, String(body.id || "")).first()
+    if (!row || row.deleted || row.missing || row.pending_path) throw new CatalogError(404, "素材已移除，请刷新目录。")
+    await authorizePath(ctx, row.original_path); await authorizePath(ctx, row.source_path)
+    const clip = await resolveClip(ctx, row, driverFor, target => flushPendingDriverState(target.resolved.storage.driver, target.resolved.storage, target.driver, ctx.requestContext))
+    return c.json({ code: 200, message: "success", data: clip })
+  } catch (e: any) { return failure(c, e instanceof CatalogError || e instanceof ClipError ? e.code : 503, e instanceof CatalogError || e instanceof ClipError ? e.message : "短预览暂不可用，请下载原文件。") }
 })

@@ -37,7 +37,7 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
   ], shares: [], plugins: [] }
   __setStoreBackendLoaderForTest(async () => ({ name: 'fixture', isConfigured: async () => true, load: async () => structuredClone(config), save: async (next: any) => { config = structuredClone(next); return true } }))
   setEnvCtx(env)
-  const cloud = new Map<string, any[]>([['/', [{ name: '旧文件夹', sign: 'dir-1', is_dir: true, size: 0, modified: '' }]], ['/旧文件夹', [{ name: '原图.png', sign: 'file-1', is_dir: false, size: 600, modified: '2026-10-02', thumb: '' }]]])
+  const cloud = new Map<string, any[]>([['/', [{ name: '旧文件夹', sign: 'dir-1', is_dir: true, size: 0, modified: '' }, { name: '素材预览缓存', sign: 'cache-dir', is_dir: true, size: 0, modified: '' }]], ['/旧文件夹', [{ name: '原图.png', sign: 'file-1', is_dir: false, size: 600, modified: '2026-10-02', thumb: '' }]], ['/素材预览缓存', [{ name: 'generated.mp4', sign: 'cache-file', is_dir: false, size: 24000, modified: '' }]]])
   const proto: any = Yun139Driver.prototype, original = Object.fromEntries(['init', 'list', 'get', 'getDetails', 'studioEnsureDirectory', 'studioRelocate'].map(k => [k, proto[k]]))
   proto.init = async () => {}
   let cloudLists = 0, cloudGets = 0
@@ -62,6 +62,8 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
   }
   try {
     assert.equal((await request('list', {}, null)).status, 401)
+    assert.equal((await request('clip', { id: 'anything' }, null)).status, 401)
+    assert.equal((await request('folder', { action: 'create', folder: '素材预览缓存' })).status, 400)
     assert.equal((await request('folder', { action: 'create', folder: '禁止' }, reader)).status, 403)
     assert.equal((await request('list', { path: '/../' })).status, 400)
     const initial = await request('list'); assert.equal(initial.status, 200, initial.json.message)
@@ -69,6 +71,9 @@ test('shared catalog preserves originals, denies unauthorized writes, rejects st
     assert.equal(initial.json.data.space.total, 20 * 1024 ** 3)
     assert.equal(initial.json.data.space.used, 4 * 1024 ** 3)
     const file = initial.json.data.assets[0]; assert.equal(file.name, '原图.png')
+    assert.equal(initial.json.data.assets.length, 1, 'derived cloud cache files never appear as duplicate library assets')
+    assert.ok(!initial.json.data.folders.includes('素材预览缓存'))
+    assert.equal((await request('clip', { id: file.id }, reader)).status, 415, 'read-only users can request derivatives, but images are never converted by this video endpoint')
     assert.ok(file.added_ms > Date.parse('2026-10-02'), 'import records when the asset enters the library')
     assert.equal((await request('resolve', { id: file.id, preview: true }, null)).status, 401)
     const source = cloud.get('/旧文件夹')![0]

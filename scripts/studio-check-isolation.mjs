@@ -17,12 +17,14 @@ const presenceOnly = objects.length === 0 || (objects.length === 1 && objects[0]
   objects[0].class_name === 'StudioPresence' && !objects[0].script_name && !objects[0].environment);
 const migrationsOnly = (config.migrations || []).every(m => !m.deleted_classes && !m.renamed_classes && !m.transferred_classes &&
   !(m.new_classes || []).length && (m.new_sqlite_classes || []).every(name => name === 'StudioPresence'));
+// Media may only provide this library's five-second derivative service.
+const mediaOnly = !config.media || (config.media.binding === 'MEDIA' && Object.keys(config.media).every(key => key === 'binding'));
 if (config.name !== expected.worker || config.account_id !== expected.account ||
     databases.length !== 1 || databases[0].binding !== 'DB' ||
     databases[0].database_name !== expected.worker || databases[0].database_id !== expected.database ||
     config.vars?.DB_DRIVER !== 'd1' || config.vars?.DB_CIPHER !== 'aes-256-gcm' ||
     config.services?.length || config.kv_namespaces?.length || config.r2_buckets?.length ||
-    !presenceOnly || !migrationsOnly) {
+    !presenceOnly || !migrationsOnly || !mediaOnly) {
   throw new Error('Deployment stopped: material library resource isolation does not match the approved configuration.');
 }
-console.log('Verified isolated material library Worker and D1; no plugin service bindings; only the library presence Durable Object.');
+console.log('Verified isolated material library Worker and D1; no plugin service bindings; only library presence and optional clip conversion.');
